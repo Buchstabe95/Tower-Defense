@@ -1,0 +1,32 @@
+# Tower Defense v0.1 Alpha
+
+Bereinigte Version für Godot 4.7.
+
+## Inhalt
+- Endlose Gegnerwellen
+- Gold, Leben, Punkte und Erfahrung
+- Sieben feste Bauplätze
+- Automatisch angreifende Türme
+- Elitegegner
+- Drei zufällige Level-up-Entscheidungen
+- Globale Verbesserungen für alle Türme
+- Game Over und direkter Neustart
+- Sauber getrennte Datenklassen für Gegner, Türme und Projektile
+
+## Installation
+1. ZIP-Datei entpacken.
+2. In Godot 4 auf **Importieren** klicken.
+3. `project.godot` auswählen.
+4. Projekt öffnen.
+5. Mit F6 oder F5 starten.
+
+## GitHub
+Ersetze die bisherigen Projektdateien durch den Inhalt dieses Ordners.
+
+Die wichtigen Dateien sind:
+- `project.godot`
+- `scenes/Main.tscn`
+- `scripts/main.gd`
+- `scripts/enemy_data.gd`
+- `scripts/tower_data.gd`
+- `scripts/projectile_data.gd`

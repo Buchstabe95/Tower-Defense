@@ -1,0 +1,600 @@
+extends Node2D
+
+const SCREEN_SIZE: Vector2 = Vector2(1280.0, 720.0)
+const PATH_Y: float = 360.0
+const START_X: float = -40.0
+const END_X: float = 1320.0
+const TOWER_COST: int = 100
+
+var gold: int = 250
+var lives: int = 20
+var score: int = 0
+var level: int = 1
+var xp: int = 0
+var xp_needed: int = 80
+
+var spawn_timer: float = 0.0
+var spawn_interval: float = 1.25
+var difficulty_time: float = 0.0
+
+var paused_for_level_up: bool = false
+var game_over: bool = false
+
+var enemies: Array[EnemyData] = []
+var towers: Array[TowerData] = []
+var projectiles: Array[ProjectileData] = []
+
+var tower_damage_multiplier: float = 1.0
+var tower_range_multiplier: float = 1.0
+var tower_speed_multiplier: float = 1.0
+
+var build_spots: Array[Vector2] = [
+	Vector2(180.0, 230.0),
+	Vector2(340.0, 490.0),
+	Vector2(500.0, 230.0),
+	Vector2(660.0, 490.0),
+	Vector2(820.0, 230.0),
+	Vector2(980.0, 490.0),
+	Vector2(1140.0, 230.0)
+]
+
+var hovered_spot: int = -1
+var selected_choices: Array[Dictionary] = []
+
+func _ready() -> void:
+	randomize()
+	queue_redraw()
+
+func _process(delta: float) -> void:
+	if game_over or paused_for_level_up:
+		queue_redraw()
+		return
+
+	difficulty_time += delta
+	spawn_timer -= delta
+
+	if spawn_timer <= 0.0:
+		spawn_enemy()
+		var scaling: float = minf(difficulty_time / 180.0, 0.55)
+		spawn_interval = maxf(0.45, 1.25 - scaling)
+		spawn_timer = spawn_interval
+
+	update_enemies(delta)
+	update_towers(delta)
+	update_projectiles(delta)
+	queue_redraw()
+
+func spawn_enemy() -> void:
+	var hp_scale: float = 1.0 + difficulty_time * 0.025
+	var speed_scale: float = 1.0 + difficulty_time * 0.0018
+	var elite_chance: float = minf(0.04 + difficulty_time / 900.0, 0.18)
+	var is_elite: bool = randf() < elite_chance
+
+	var enemy_hp: float = 42.0 * hp_scale
+	var enemy_radius: float = 15.0
+	var enemy_reward: int = 12
+
+	if is_elite:
+		enemy_hp *= 3.2
+		enemy_radius = 22.0
+		enemy_reward = 36
+
+	var enemy := EnemyData.new(
+		Vector2(START_X, PATH_Y),
+		enemy_hp,
+		62.0 * speed_scale,
+		enemy_radius,
+		enemy_reward,
+		is_elite
+	)
+	enemies.append(enemy)
+
+func update_enemies(delta: float) -> void:
+	for index: int in range(enemies.size() - 1, -1, -1):
+		var enemy: EnemyData = enemies[index]
+		enemy.position.x += enemy.speed * delta
+
+		if enemy.position.x >= END_X:
+			enemies.remove_at(index)
+			lives -= 1
+
+			if lives <= 0:
+				game_over = true
+
+func update_towers(delta: float) -> void:
+	for tower: TowerData in towers:
+		tower.cooldown -= delta
+
+		if tower.cooldown > 0.0:
+			continue
+
+		var target: EnemyData = find_target(
+			tower.position,
+			tower.attack_range * tower_range_multiplier
+		)
+
+		if target == null:
+			continue
+
+		var projectile := ProjectileData.new(
+			tower.position,
+			target,
+			tower.damage * tower_damage_multiplier
+		)
+		projectiles.append(projectile)
+		tower.cooldown = tower.base_cooldown / tower_speed_multiplier
+
+func find_target(origin: Vector2, maximum_range: float) -> EnemyData:
+	var best_target: EnemyData = null
+	var best_progress: float = -INF
+
+	for enemy: EnemyData in enemies:
+		if origin.distance_to(enemy.position) <= maximum_range:
+			if enemy.position.x > best_progress:
+				best_target = enemy
+				best_progress = enemy.position.x
+
+	return best_target
+
+func update_projectiles(delta: float) -> void:
+	for index: int in range(projectiles.size() - 1, -1, -1):
+		var projectile: ProjectileData = projectiles[index]
+
+		if not enemies.has(projectile.target):
+			projectiles.remove_at(index)
+			continue
+
+		var direction: Vector2 = projectile.position.direction_to(projectile.target.position)
+		projectile.position += direction * projectile.speed * delta
+
+		if projectile.position.distance_to(projectile.target.position) < 12.0:
+			projectile.target.hp -= projectile.damage
+			projectiles.remove_at(index)
+
+			if projectile.target.hp <= 0.0:
+				defeat_enemy(projectile.target)
+
+func defeat_enemy(enemy: EnemyData) -> void:
+	if not enemies.has(enemy):
+		return
+
+	enemies.erase(enemy)
+	gold += enemy.reward
+	score += enemy.reward
+	add_xp(enemy.reward)
+
+	for projectile: ProjectileData in projectiles:
+		if projectile.target == enemy:
+			projectile.target = null
+
+func add_xp(amount: int) -> void:
+	xp += amount
+
+	if xp >= xp_needed:
+		xp -= xp_needed
+		level += 1
+		xp_needed = int(round(float(xp_needed) * 1.28))
+		open_level_up()
+
+func open_level_up() -> void:
+	paused_for_level_up = true
+	selected_choices = get_random_choices(3)
+
+func get_random_choices(count: int) -> Array[Dictionary]:
+	var pool: Array[Dictionary] = [
+		{
+			"title": "Stärkere Geschosse",
+			"text": "Alle Türme verursachen 20 % mehr Schaden.",
+			"type": "damage",
+			"value": 1.20
+		},
+		{
+			"title": "Grössere Reichweite",
+			"text": "Alle Türme erhalten 18 % mehr Reichweite.",
+			"type": "range",
+			"value": 1.18
+		},
+		{
+			"title": "Schneller Angriff",
+			"text": "Alle Türme greifen 16 % schneller an.",
+			"type": "speed",
+			"value": 1.16
+		},
+		{
+			"title": "Kriegsbeute",
+			"text": "Du erhältst sofort 140 Gold.",
+			"type": "gold",
+			"value": 140
+		},
+		{
+			"title": "Verstärkte Befestigung",
+			"text": "Du erhältst 3 zusätzliche Leben.",
+			"type": "lives",
+			"value": 3
+		}
+	]
+
+	pool.shuffle()
+
+	var result: Array[Dictionary] = []
+	for index: int in range(mini(count, pool.size())):
+		result.append(pool[index])
+
+	return result
+
+func apply_choice(choice: Dictionary) -> void:
+	var choice_type: String = String(choice["type"])
+
+	match choice_type:
+		"damage":
+			tower_damage_multiplier *= float(choice["value"])
+		"range":
+			tower_range_multiplier *= float(choice["value"])
+		"speed":
+			tower_speed_multiplier *= float(choice["value"])
+		"gold":
+			gold += int(choice["value"])
+		"lives":
+			lives += int(choice["value"])
+
+	paused_for_level_up = false
+	selected_choices.clear()
+
+func try_build_tower(spot_index: int) -> void:
+	if game_over or paused_for_level_up:
+		return
+
+	for tower: TowerData in towers:
+		if tower.spot_index == spot_index:
+			return
+
+	if gold < TOWER_COST:
+		return
+
+	gold -= TOWER_COST
+	towers.append(TowerData.new(spot_index, build_spots[spot_index]))
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		var mouse_event := event as InputEventMouseMotion
+		hovered_spot = get_spot_at(mouse_event.position)
+		queue_redraw()
+
+	if event is InputEventMouseButton:
+		var button_event := event as InputEventMouseButton
+
+		if button_event.button_index != MOUSE_BUTTON_LEFT or not button_event.pressed:
+			return
+
+		if game_over:
+			restart_game()
+			return
+
+		if paused_for_level_up:
+			var choice_index: int = get_choice_at(button_event.position)
+
+			if choice_index >= 0:
+				apply_choice(selected_choices[choice_index])
+
+			return
+
+		var spot_index: int = get_spot_at(button_event.position)
+
+		if spot_index >= 0:
+			try_build_tower(spot_index)
+
+func get_spot_at(mouse_position: Vector2) -> int:
+	for index: int in range(build_spots.size()):
+		if build_spots[index].distance_to(mouse_position) <= 34.0:
+			return index
+
+	return -1
+
+func get_choice_at(mouse_position: Vector2) -> int:
+	for index: int in range(selected_choices.size()):
+		var card_rect := Rect2(
+			210.0 + float(index) * 300.0,
+			260.0,
+			260.0,
+			190.0
+		)
+
+		if card_rect.has_point(mouse_position):
+			return index
+
+	return -1
+
+func restart_game() -> void:
+	gold = 250
+	lives = 20
+	score = 0
+	level = 1
+	xp = 0
+	xp_needed = 80
+
+	spawn_timer = 0.0
+	spawn_interval = 1.25
+	difficulty_time = 0.0
+
+	paused_for_level_up = false
+	game_over = false
+
+	enemies.clear()
+	towers.clear()
+	projectiles.clear()
+	selected_choices.clear()
+
+	tower_damage_multiplier = 1.0
+	tower_range_multiplier = 1.0
+	tower_speed_multiplier = 1.0
+
+func _draw() -> void:
+	draw_rect(Rect2(Vector2.ZERO, SCREEN_SIZE), Color("#18231c"))
+
+	draw_rect(
+		Rect2(0.0, PATH_Y - 44.0, SCREEN_SIZE.x, 88.0),
+		Color("#6b5a42")
+	)
+	draw_line(
+		Vector2(0.0, PATH_Y - 44.0),
+		Vector2(SCREEN_SIZE.x, PATH_Y - 44.0),
+		Color("#9a8768"),
+		3.0
+	)
+	draw_line(
+		Vector2(0.0, PATH_Y + 44.0),
+		Vector2(SCREEN_SIZE.x, PATH_Y + 44.0),
+		Color("#9a8768"),
+		3.0
+	)
+
+	draw_build_spots()
+	draw_towers()
+	draw_enemies()
+	draw_projectiles()
+	draw_hud()
+
+	if paused_for_level_up:
+		draw_level_up_overlay()
+
+	if game_over:
+		draw_game_over_overlay()
+
+func draw_build_spots() -> void:
+	for index: int in range(build_spots.size()):
+		var occupied: bool = is_spot_occupied(index)
+		var color := Color("#4c6654")
+
+		if index == hovered_spot and not occupied:
+			color = Color("#7da66f")
+		elif occupied:
+			color = Color("#34463a")
+
+		draw_circle(build_spots[index], 30.0, color)
+		draw_arc(
+			build_spots[index],
+			30.0,
+			0.0,
+			TAU,
+			36,
+			Color("#a8c3ad"),
+			2.0
+		)
+
+func is_spot_occupied(spot_index: int) -> bool:
+	for tower: TowerData in towers:
+		if tower.spot_index == spot_index:
+			return true
+
+	return false
+
+func draw_towers() -> void:
+	for tower: TowerData in towers:
+		if tower.spot_index == hovered_spot:
+			var effective_range: float = tower.attack_range * tower_range_multiplier
+
+			draw_circle(
+				tower.position,
+				effective_range,
+				Color(0.35, 0.70, 0.45, 0.10)
+			)
+			draw_arc(
+				tower.position,
+				effective_range,
+				0.0,
+				TAU,
+				64,
+				Color(0.45, 0.85, 0.55, 0.40),
+				2.0
+			)
+
+		draw_rect(
+			Rect2(tower.position - Vector2(18.0, 18.0), Vector2(36.0, 36.0)),
+			Color("#d7c48c")
+		)
+		draw_circle(tower.position, 9.0, Color("#384635"))
+
+func draw_enemies() -> void:
+	for enemy: EnemyData in enemies:
+		var enemy_color := Color("#bd4a45")
+
+		if enemy.elite:
+			enemy_color = Color("#7f3fa4")
+
+		draw_circle(enemy.position, enemy.radius, enemy_color)
+
+		var hp_ratio: float = maxf(0.0, enemy.hp / enemy.max_hp)
+		var bar_position := enemy.position + Vector2(-enemy.radius, -enemy.radius - 11.0)
+		var bar_size := Vector2(enemy.radius * 2.0, 5.0)
+
+		draw_rect(Rect2(bar_position, bar_size), Color("#2a211f"))
+		draw_rect(
+			Rect2(bar_position, Vector2(bar_size.x * hp_ratio, bar_size.y)),
+			Color("#70b85d")
+		)
+
+func draw_projectiles() -> void:
+	for projectile: ProjectileData in projectiles:
+		draw_circle(projectile.position, 5.0, Color("#f2de83"))
+
+func draw_hud() -> void:
+	draw_rect(
+		Rect2(0.0, 0.0, SCREEN_SIZE.x, 74.0),
+		Color(0.05, 0.07, 0.06, 0.88)
+	)
+
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(26.0, 45.0),
+		"Gold: %d" % gold,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1.0,
+		24,
+		Color.WHITE
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(190.0, 45.0),
+		"Leben: %d" % lives,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1.0,
+		24,
+		Color.WHITE
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(350.0, 45.0),
+		"Level: %d" % level,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1.0,
+		24,
+		Color.WHITE
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(520.0, 45.0),
+		"Punkte: %d" % score,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1.0,
+		24,
+		Color.WHITE
+	)
+
+	var xp_ratio: float = float(xp) / float(xp_needed)
+
+	draw_rect(Rect2(760.0, 24.0, 470.0, 18.0), Color("#2d332f"))
+	draw_rect(
+		Rect2(760.0, 24.0, 470.0 * xp_ratio, 18.0),
+		Color("#6d9e63")
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(760.0, 64.0),
+		"Erfahrung %d / %d" % [xp, xp_needed],
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1.0,
+		16,
+		Color("#d5ddd6")
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(24.0, 700.0),
+		"Klicke auf einen Bauplatz. Ein Turm kostet %d Gold." % TOWER_COST,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1.0,
+		18,
+		Color("#d6dfd8")
+	)
+
+func draw_level_up_overlay() -> void:
+	draw_rect(
+		Rect2(Vector2.ZERO, SCREEN_SIZE),
+		Color(0.02, 0.02, 0.02, 0.78)
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(0.0, 150.0),
+		"LEVELAUFSTIEG",
+		HORIZONTAL_ALIGNMENT_CENTER,
+		SCREEN_SIZE.x,
+		48,
+		Color.WHITE
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(0.0, 195.0),
+		"Wähle eine Verbesserung für alle Türme",
+		HORIZONTAL_ALIGNMENT_CENTER,
+		SCREEN_SIZE.x,
+		22,
+		Color("#cfd8d0")
+	)
+
+	for index: int in range(selected_choices.size()):
+		var card_rect := Rect2(
+			210.0 + float(index) * 300.0,
+			260.0,
+			260.0,
+			190.0
+		)
+		var is_hovered: bool = card_rect.has_point(get_viewport().get_mouse_position())
+		var card_color := Color("#34463a")
+
+		if is_hovered:
+			card_color = Color("#496553")
+
+		draw_rect(card_rect, card_color)
+		draw_rect(card_rect, Color("#a7c7ad"), false, 2.0)
+
+		draw_string(
+			ThemeDB.fallback_font,
+			card_rect.position + Vector2(18.0, 45.0),
+			String(selected_choices[index]["title"]),
+			HORIZONTAL_ALIGNMENT_LEFT,
+			225.0,
+			23,
+			Color.WHITE
+		)
+		draw_multiline_string(
+			ThemeDB.fallback_font,
+			card_rect.position + Vector2(18.0, 85.0),
+			String(selected_choices[index]["text"]),
+			HORIZONTAL_ALIGNMENT_LEFT,
+			225.0,
+			18,
+			3,
+			Color("#dce5dd")
+		)
+
+func draw_game_over_overlay() -> void:
+	draw_rect(
+		Rect2(Vector2.ZERO, SCREEN_SIZE),
+		Color(0.02, 0.02, 0.02, 0.76)
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(0.0, 290.0),
+		"GAME OVER",
+		HORIZONTAL_ALIGNMENT_CENTER,
+		SCREEN_SIZE.x,
+		56,
+		Color.WHITE
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(0.0, 350.0),
+		"Punkte: %d   Level: %d" % [score, level],
+		HORIZONTAL_ALIGNMENT_CENTER,
+		SCREEN_SIZE.x,
+		28,
+		Color("#d9ddd8")
+	)
+	draw_string(
+		ThemeDB.fallback_font,
+		Vector2(0.0, 420.0),
+		"Klicken, um neu zu starten",
+		HORIZONTAL_ALIGNMENT_CENTER,
+		SCREEN_SIZE.x,
+		22,
+		Color("#a9c7ad")
+	)
